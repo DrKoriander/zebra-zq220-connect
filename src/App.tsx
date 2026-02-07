@@ -29,111 +29,62 @@ import {colors} from './theme';
 
 const DEFAULT_PIN = '0000';
 
-function isZebraDevice(device: BluetoothDevice): boolean {
-  const name = (device.name || '').toUpperCase();
-  const address = (device.address || '').toUpperCase();
-  // Zebra OUI prefixes
-  const zebraOuis = ['00:A0:96', '00:07:4D', 'AC:3F:A4'];
-  const isZebraOui = zebraOuis.some(oui => address.startsWith(oui));
-  const isZebraName =
-    name.includes('ZQ') || name.includes('ZEBRA') || name.includes('ZD');
-  return isZebraOui || isZebraName;
-}
-
 type PairingStatus = 'idle' | 'pairing' | 'success' | 'failed';
 
 interface DeviceState extends BluetoothDevice {
   pairingStatus: PairingStatus;
 }
 
-async function checkPermissions(): Promise<boolean> {
+// Try requesting permissions via Android API
+async function requestPermissions(): Promise<void> {
   if (Platform.OS !== 'android') {
-    return false;
+    return;
   }
   try {
-    const btScan = await PermissionsAndroid.check(
+    await PermissionsAndroid.requestMultiple([
       'android.permission.BLUETOOTH_SCAN' as PermissionsAndroid.Permission,
-    );
-    const btConnect = await PermissionsAndroid.check(
       'android.permission.BLUETOOTH_CONNECT' as PermissionsAndroid.Permission,
-    );
-    console.log('Permission check: SCAN=' + btScan + ' CONNECT=' + btConnect);
-    return btScan && btConnect;
+      'android.permission.ACCESS_FINE_LOCATION' as PermissionsAndroid.Permission,
+    ]);
   } catch (e) {
-    console.error('Permission check failed:', e);
-    return false;
+    console.warn('Permission request error:', e);
   }
-}
-
-async function requestPermissions(): Promise<boolean> {
-  if (Platform.OS !== 'android') {
-    return false;
-  }
-
-  try {
-    // First check if already granted (e.g. user just came from Settings)
-    const alreadyGranted = await checkPermissions();
-    if (alreadyGranted) {
-      return true;
-    }
-
-    const permissions: string[] = [
-      'android.permission.BLUETOOTH_SCAN',
-      'android.permission.BLUETOOTH_CONNECT',
-      'android.permission.ACCESS_FINE_LOCATION',
-    ];
-
-    const results = await PermissionsAndroid.requestMultiple(
-      permissions as PermissionsAndroid.Permission[],
-    );
-
-    console.log('Permission request results:', JSON.stringify(results));
-
-    const granted =
-      results['android.permission.BLUETOOTH_SCAN'] === PermissionsAndroid.RESULTS.GRANTED &&
-      results['android.permission.BLUETOOTH_CONNECT'] === PermissionsAndroid.RESULTS.GRANTED;
-
-    return granted;
-  } catch (e) {
-    console.error('Permission request failed:', e);
-    return false;
-  }
-}
-
-function openAppSettings() {
-  Linking.openSettings();
 }
 
 export default function App() {
-  const [permGranted, setPermGranted] = useState(false);
+  const [status, setStatus] = useState<'loading' | 'no_permission' | 'ready'>('loading');
+  const [error, setError] = useState('');
   const [scanning, setScanning] = useState(false);
   const [devices, setDevices] = useState<DeviceState[]>([]);
   const devicesRef = useRef<DeviceState[]>([]);
 
-  // Keep ref in sync
   useEffect(() => {
     devicesRef.current = devices;
   }, [devices]);
 
-  const handleRequestPermissions = useCallback(async () => {
-    const granted = await requestPermissions();
-    setPermGranted(granted);
-    if (granted) {
-      loadBondedDevices();
+  // Try to use BT - if it works, permissions are granted
+  const tryBluetooth = useCallback(async () => {
+    try {
+      const bonded = await getBondedDevices();
+      setDevices(
+        bonded.map(d => ({...d, pairingStatus: 'idle' as PairingStatus})),
+      );
+      setStatus('ready');
+      setError('');
+    } catch (e: any) {
+      console.warn('BT access failed:', e.message);
+      setError(e.message || 'Bluetooth nicht verfügbar');
+      setStatus('no_permission');
     }
   }, []);
 
-  const handleCheckPermissions = useCallback(async () => {
-    const granted = await checkPermissions();
-    setPermGranted(granted);
-    if (granted) {
-      loadBondedDevices();
-    }
-  }, []);
-
+  // On mount: request permissions then try BT
   useEffect(() => {
-    handleRequestPermissions();
-  }, [handleRequestPermissions]);
+    (async () => {
+      await requestPermissions();
+      await tryBluetooth();
+    })();
+  }, [tryBluetooth]);
 
   useEffect(() => {
     const subs = [
@@ -174,17 +125,6 @@ export default function App() {
     };
   }, []);
 
-  const loadBondedDevices = useCallback(async () => {
-    try {
-      const bonded = await getBondedDevices();
-      setDevices(
-        bonded.map(d => ({...d, pairingStatus: 'idle' as PairingStatus})),
-      );
-    } catch (e) {
-      console.warn('Failed to load bonded devices', e);
-    }
-  }, []);
-
   const handleScan = useCallback(async () => {
     if (scanning) {
       await stopDiscovery();
@@ -192,7 +132,6 @@ export default function App() {
       return;
     }
 
-    // Keep bonded devices, remove unbonded
     setDevices(prev => prev.filter(d => d.bondState === BOND_BONDED));
     setScanning(true);
     try {
@@ -238,31 +177,46 @@ export default function App() {
     }
   }, []);
 
-  if (!permGranted) {
+  // Loading screen
+  if (status === 'loading') {
+    return (
+      <View style={styles.center}>
+        <StatusBar backgroundColor={colors.primary} barStyle="light-content" />
+        <ActivityIndicator size="large" color={colors.primary} />
+      </View>
+    );
+  }
+
+  // Permission error screen
+  if (status === 'no_permission') {
     return (
       <View style={styles.center}>
         <StatusBar backgroundColor={colors.primary} barStyle="light-content" />
         <Text style={styles.errorText}>
-          Bluetooth-Berechtigungen werden benötigt.
+          Bluetooth-Zugriff fehlgeschlagen
         </Text>
         <Text style={styles.hintText}>
-          Bitte "Geräte in der Nähe" und "Standort" in den
-          App-Einstellungen aktivieren.
+          Bitte in den App-Einstellungen "Geräte in der Nähe" und "Standort"
+          aktivieren.
         </Text>
+        {error ? (
+          <Text style={styles.debugText}>Fehler: {error}</Text>
+        ) : null}
         <TouchableOpacity
           style={styles.button}
-          onPress={openAppSettings}>
+          onPress={() => Linking.openSettings()}>
           <Text style={styles.buttonText}>Einstellungen öffnen</Text>
         </TouchableOpacity>
         <TouchableOpacity
           style={[styles.button, {marginTop: 12, backgroundColor: colors.accent}]}
-          onPress={handleCheckPermissions}>
+          onPress={tryBluetooth}>
           <Text style={styles.buttonText}>Erneut prüfen</Text>
         </TouchableOpacity>
       </View>
     );
   }
 
+  // Main screen
   const bondedDevices = devices.filter(d => d.bondState === BOND_BONDED);
   const discoveredDevices = devices.filter(d => d.bondState !== BOND_BONDED);
 
@@ -297,7 +251,7 @@ export default function App() {
         ListEmptyComponent={
           <Text style={styles.emptyText}>
             {scanning
-              ? 'Suche nach Zebra-Druckern...'
+              ? 'Suche nach Bluetooth-Geräten...'
               : 'Drücke "Drucker suchen" um zu beginnen'}
           </Text>
         }
@@ -440,8 +394,9 @@ const styles = StyleSheet.create({
   },
   errorText: {
     color: colors.danger,
-    fontSize: 16,
-    marginBottom: 16,
+    fontSize: 18,
+    fontWeight: '600',
+    marginBottom: 12,
     textAlign: 'center',
   },
   hintText: {
@@ -450,6 +405,13 @@ const styles = StyleSheet.create({
     marginBottom: 20,
     textAlign: 'center',
     paddingHorizontal: 32,
+  },
+  debugText: {
+    color: colors.textSecondary,
+    fontSize: 12,
+    marginBottom: 20,
+    textAlign: 'center',
+    fontFamily: Platform.OS === 'android' ? 'monospace' : 'Courier',
   },
   button: {
     backgroundColor: colors.primary,
