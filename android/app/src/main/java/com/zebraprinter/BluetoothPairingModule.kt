@@ -290,6 +290,7 @@ class BluetoothPairingModule(private val reactContext: ReactApplicationContext) 
             }
 
             pairingPin = pin
+            PairingReceiver.pin = pin
 
             val device = adapter.getRemoteDevice(address)
             if (device.bondState == BluetoothDevice.BOND_BONDED) {
