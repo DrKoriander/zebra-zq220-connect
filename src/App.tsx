@@ -54,6 +54,7 @@ async function requestPermissions(): Promise<void> {
 export default function App() {
   const [status, setStatus] = useState<'loading' | 'no_permission' | 'ready'>('loading');
   const [error, setError] = useState('');
+  const [scanError, setScanError] = useState('');
   const [scanning, setScanning] = useState(false);
   const [devices, setDevices] = useState<DeviceState[]>([]);
   const devicesRef = useRef<DeviceState[]>([]);
@@ -132,13 +133,16 @@ export default function App() {
       return;
     }
 
+    setScanError('');
     setDevices(prev => prev.filter(d => d.bondState === BOND_BONDED));
     setScanning(true);
     try {
       await startDiscovery();
     } catch (e: any) {
       setScanning(false);
-      console.warn('Discovery failed', e);
+      const msg = e.message || e.code || 'Unbekannter Fehler';
+      setScanError(msg);
+      console.warn('Discovery failed:', msg);
     }
   }, [scanning]);
 
@@ -243,6 +247,15 @@ export default function App() {
           <Text style={styles.scanButtonText}>Drucker suchen</Text>
         )}
       </TouchableOpacity>
+
+      {scanError ? (
+        <View style={styles.scanErrorBox}>
+          <Text style={styles.scanErrorText}>Suche fehlgeschlagen: {scanError}</Text>
+          <Text style={styles.scanErrorHint}>
+            Bitte Standortdienste (GPS) einschalten und erneut versuchen.
+          </Text>
+        </View>
+      ) : null}
 
       <FlatList
         data={[...bondedDevices, ...discoveredDevices]}
@@ -385,6 +398,24 @@ const styles = StyleSheet.create({
   list: {
     padding: 16,
     paddingTop: 0,
+  },
+  scanErrorBox: {
+    backgroundColor: '#fff3cd',
+    marginHorizontal: 16,
+    padding: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#ffc107',
+  },
+  scanErrorText: {
+    color: '#856404',
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  scanErrorHint: {
+    color: '#856404',
+    fontSize: 12,
+    marginTop: 4,
   },
   emptyText: {
     textAlign: 'center',
