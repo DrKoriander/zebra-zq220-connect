@@ -1,6 +1,5 @@
 package com.zebraprinter
 
-import android.Manifest
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothManager
@@ -8,10 +7,8 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
-import android.content.pm.PackageManager
 import android.os.Build
 import android.util.Log
-import androidx.core.content.ContextCompat
 import com.facebook.react.bridge.*
 import com.facebook.react.modules.core.DeviceEventManagerModule
 
@@ -72,19 +69,16 @@ class BluetoothPairingModule(private val reactContext: ReactApplicationContext) 
                     device?.let {
                         try {
                             when (variant) {
-                                // PAIRING_VARIANT_PIN (0)
                                 0 -> {
                                     it.setPin(pairingPin.toByteArray())
                                     Log.d(TAG, "PIN set to $pairingPin for ${it.address}")
                                     abortBroadcast()
                                 }
-                                // PAIRING_VARIANT_PASSKEY_CONFIRMATION (2)
                                 2 -> {
                                     it.setPairingConfirmation(true)
                                     Log.d(TAG, "Passkey confirmation set for ${it.address}")
                                     abortBroadcast()
                                 }
-                                // PAIRING_VARIANT_CONSENT (3)
                                 3 -> {
                                     it.setPairingConfirmation(true)
                                     Log.d(TAG, "Consent confirmation set for ${it.address}")
@@ -138,6 +132,7 @@ class BluetoothPairingModule(private val reactContext: ReactApplicationContext) 
         registerPairingReceiver()
     }
 
+    @Suppress("MissingPermission")
     private fun registerPairingReceiver() {
         val pairingFilter = IntentFilter().apply {
             addAction(BluetoothDevice.ACTION_PAIRING_REQUEST)
@@ -165,25 +160,21 @@ class BluetoothPairingModule(private val reactContext: ReactApplicationContext) 
         } catch (_: Exception) {}
     }
 
-    private fun hasPermission(permission: String): Boolean {
-        return ContextCompat.checkSelfPermission(reactContext, permission) == PackageManager.PERMISSION_GRANTED
-    }
-
+    @Suppress("MissingPermission")
     private fun handleDeviceFound(device: BluetoothDevice) {
-        if (!hasPermission(Manifest.permission.BLUETOOTH_CONNECT)) {
-            Log.w(TAG, "Device found but BLUETOOTH_CONNECT permission missing")
-            return
-        }
+        try {
+            val name = device.name ?: "Unknown"
+            Log.d(TAG, "Device found: $name (${device.address})")
 
-        val name = device.name ?: "Unknown"
-        Log.d(TAG, "Device found: $name (${device.address})")
-
-        val params = Arguments.createMap().apply {
-            putString("address", device.address)
-            putString("name", name)
-            putInt("bondState", device.bondState)
+            val params = Arguments.createMap().apply {
+                putString("address", device.address)
+                putString("name", name)
+                putInt("bondState", device.bondState)
+            }
+            sendEvent("onDeviceFound", params)
+        } catch (e: SecurityException) {
+            Log.e(TAG, "SecurityException in handleDeviceFound", e)
         }
-        sendEvent("onDeviceFound", params)
     }
 
     private fun sendEvent(eventName: String, params: WritableMap?) {
@@ -192,110 +183,114 @@ class BluetoothPairingModule(private val reactContext: ReactApplicationContext) 
             .emit(eventName, params)
     }
 
+    @Suppress("MissingPermission")
     @ReactMethod
     fun startDiscovery(promise: Promise) {
-        if (!hasPermission(Manifest.permission.BLUETOOTH_SCAN)) {
-            promise.reject("PERMISSION_DENIED", "BLUETOOTH_SCAN permission not granted")
-            return
-        }
+        try {
+            val adapter = bluetoothAdapter
+            if (adapter == null) {
+                promise.reject("BT_UNAVAILABLE", "Bluetooth is not available")
+                return
+            }
 
-        val adapter = bluetoothAdapter
-        if (adapter == null) {
-            promise.reject("BT_UNAVAILABLE", "Bluetooth is not available")
-            return
-        }
+            if (!adapter.isEnabled) {
+                promise.reject("BT_DISABLED", "Bluetooth is not enabled")
+                return
+            }
 
-        if (!adapter.isEnabled) {
-            promise.reject("BT_DISABLED", "Bluetooth is not enabled")
-            return
-        }
+            if (isDiscovering) {
+                adapter.cancelDiscovery()
+            }
 
-        if (isDiscovering) {
-            adapter.cancelDiscovery()
-        }
+            val filter = IntentFilter().apply {
+                addAction(BluetoothDevice.ACTION_FOUND)
+                addAction(BluetoothAdapter.ACTION_DISCOVERY_FINISHED)
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                reactContext.registerReceiver(discoveryReceiver, filter, Context.RECEIVER_EXPORTED)
+            } else {
+                reactContext.registerReceiver(discoveryReceiver, filter)
+            }
 
-        val filter = IntentFilter().apply {
-            addAction(BluetoothDevice.ACTION_FOUND)
-            addAction(BluetoothAdapter.ACTION_DISCOVERY_FINISHED)
-        }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            reactContext.registerReceiver(discoveryReceiver, filter, Context.RECEIVER_EXPORTED)
-        } else {
-            reactContext.registerReceiver(discoveryReceiver, filter)
-        }
-
-        isDiscovering = adapter.startDiscovery()
-        Log.d(TAG, "Discovery started: $isDiscovering")
-        if (isDiscovering) {
-            promise.resolve(true)
-        } else {
-            promise.reject("DISCOVERY_FAILED", "Failed to start discovery")
+            isDiscovering = adapter.startDiscovery()
+            Log.d(TAG, "Discovery started: $isDiscovering")
+            if (isDiscovering) {
+                promise.resolve(true)
+            } else {
+                promise.reject("DISCOVERY_FAILED", "Failed to start discovery")
+            }
+        } catch (e: SecurityException) {
+            promise.reject("SECURITY_ERROR", "Bluetooth permission denied: ${e.message}")
+        } catch (e: Exception) {
+            promise.reject("ERROR", e.message)
         }
     }
 
+    @Suppress("MissingPermission")
     @ReactMethod
     fun stopDiscovery(promise: Promise) {
-        val adapter = bluetoothAdapter
-        if (adapter == null) {
-            promise.reject("BT_UNAVAILABLE", "Bluetooth is not available")
-            return
-        }
-
-        adapter.cancelDiscovery()
-        isDiscovering = false
         try {
-            reactContext.unregisterReceiver(discoveryReceiver)
-        } catch (_: Exception) {}
-        promise.resolve(true)
-    }
-
-    @ReactMethod
-    fun getBondedDevices(promise: Promise) {
-        if (!hasPermission(Manifest.permission.BLUETOOTH_CONNECT)) {
-            promise.reject("PERMISSION_DENIED", "BLUETOOTH_CONNECT permission not granted")
-            return
-        }
-
-        val adapter = bluetoothAdapter
-        if (adapter == null) {
-            promise.reject("BT_UNAVAILABLE", "Bluetooth is not available")
-            return
-        }
-
-        val devices = Arguments.createArray()
-        adapter.bondedDevices?.forEach { device ->
-            val map = Arguments.createMap().apply {
-                putString("address", device.address)
-                putString("name", device.name ?: "Unknown")
-                putInt("bondState", device.bondState)
+            val adapter = bluetoothAdapter
+            if (adapter == null) {
+                promise.reject("BT_UNAVAILABLE", "Bluetooth is not available")
+                return
             }
-            devices.pushMap(map)
-        }
-        promise.resolve(devices)
-    }
 
-    @ReactMethod
-    fun pairDevice(address: String, pin: String, promise: Promise) {
-        if (!hasPermission(Manifest.permission.BLUETOOTH_CONNECT)) {
-            promise.reject("PERMISSION_DENIED", "BLUETOOTH_CONNECT permission not granted")
-            return
-        }
-
-        val adapter = bluetoothAdapter
-        if (adapter == null) {
-            promise.reject("BT_UNAVAILABLE", "Bluetooth is not available")
-            return
-        }
-
-        // Stop discovery before pairing
-        if (isDiscovering) {
             adapter.cancelDiscovery()
             isDiscovering = false
+            try {
+                reactContext.unregisterReceiver(discoveryReceiver)
+            } catch (_: Exception) {}
+            promise.resolve(true)
+        } catch (e: Exception) {
+            promise.reject("ERROR", e.message)
         }
+    }
 
-        pairingPin = pin
-
+    @Suppress("MissingPermission")
+    @ReactMethod
+    fun getBondedDevices(promise: Promise) {
         try {
+            val adapter = bluetoothAdapter
+            if (adapter == null) {
+                promise.reject("BT_UNAVAILABLE", "Bluetooth is not available")
+                return
+            }
+
+            val devices = Arguments.createArray()
+            adapter.bondedDevices?.forEach { device ->
+                val map = Arguments.createMap().apply {
+                    putString("address", device.address)
+                    putString("name", device.name ?: "Unknown")
+                    putInt("bondState", device.bondState)
+                }
+                devices.pushMap(map)
+            }
+            promise.resolve(devices)
+        } catch (e: SecurityException) {
+            promise.reject("SECURITY_ERROR", "Bluetooth permission denied: ${e.message}")
+        } catch (e: Exception) {
+            promise.reject("ERROR", e.message)
+        }
+    }
+
+    @Suppress("MissingPermission")
+    @ReactMethod
+    fun pairDevice(address: String, pin: String, promise: Promise) {
+        try {
+            val adapter = bluetoothAdapter
+            if (adapter == null) {
+                promise.reject("BT_UNAVAILABLE", "Bluetooth is not available")
+                return
+            }
+
+            if (isDiscovering) {
+                adapter.cancelDiscovery()
+                isDiscovering = false
+            }
+
+            pairingPin = pin
+
             val device = adapter.getRemoteDevice(address)
             if (device.bondState == BluetoothDevice.BOND_BONDED) {
                 promise.resolve("ALREADY_BONDED")
@@ -308,25 +303,23 @@ class BluetoothPairingModule(private val reactContext: ReactApplicationContext) 
             } else {
                 promise.reject("BOND_FAILED", "Failed to start bonding")
             }
+        } catch (e: SecurityException) {
+            promise.reject("SECURITY_ERROR", "Bluetooth permission denied: ${e.message}")
         } catch (e: Exception) {
             promise.reject("ERROR", e.message)
         }
     }
 
+    @Suppress("MissingPermission")
     @ReactMethod
     fun unpairDevice(address: String, promise: Promise) {
-        if (!hasPermission(Manifest.permission.BLUETOOTH_CONNECT)) {
-            promise.reject("PERMISSION_DENIED", "BLUETOOTH_CONNECT permission not granted")
-            return
-        }
-
-        val adapter = bluetoothAdapter
-        if (adapter == null) {
-            promise.reject("BT_UNAVAILABLE", "Bluetooth is not available")
-            return
-        }
-
         try {
+            val adapter = bluetoothAdapter
+            if (adapter == null) {
+                promise.reject("BT_UNAVAILABLE", "Bluetooth is not available")
+                return
+            }
+
             val device = adapter.getRemoteDevice(address)
             val method = device.javaClass.getMethod("removeBond")
             val result = method.invoke(device) as Boolean
@@ -335,18 +328,16 @@ class BluetoothPairingModule(private val reactContext: ReactApplicationContext) 
             } else {
                 promise.reject("UNPAIR_FAILED", "Failed to remove bond")
             }
+        } catch (e: SecurityException) {
+            promise.reject("SECURITY_ERROR", "Bluetooth permission denied: ${e.message}")
         } catch (e: Exception) {
             promise.reject("ERROR", e.message)
         }
     }
 
     @ReactMethod
-    fun addListener(eventName: String) {
-        // Required for RN event emitter
-    }
+    fun addListener(eventName: String) {}
 
     @ReactMethod
-    fun removeListeners(count: Int) {
-        // Required for RN event emitter
-    }
+    fun removeListeners(count: Int) {}
 }
