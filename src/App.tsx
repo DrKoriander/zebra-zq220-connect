@@ -46,14 +46,37 @@ interface DeviceState extends BluetoothDevice {
   pairingStatus: PairingStatus;
 }
 
-type PermResult = {granted: boolean; blocked: boolean};
-
-async function requestPermissions(): Promise<PermResult> {
+async function checkPermissions(): Promise<boolean> {
   if (Platform.OS !== 'android') {
-    return {granted: false, blocked: false};
+    return false;
+  }
+  try {
+    const btScan = await PermissionsAndroid.check(
+      'android.permission.BLUETOOTH_SCAN' as PermissionsAndroid.Permission,
+    );
+    const btConnect = await PermissionsAndroid.check(
+      'android.permission.BLUETOOTH_CONNECT' as PermissionsAndroid.Permission,
+    );
+    console.log('Permission check: SCAN=' + btScan + ' CONNECT=' + btConnect);
+    return btScan && btConnect;
+  } catch (e) {
+    console.error('Permission check failed:', e);
+    return false;
+  }
+}
+
+async function requestPermissions(): Promise<boolean> {
+  if (Platform.OS !== 'android') {
+    return false;
   }
 
   try {
+    // First check if already granted (e.g. user just came from Settings)
+    const alreadyGranted = await checkPermissions();
+    if (alreadyGranted) {
+      return true;
+    }
+
     const permissions: string[] = [
       'android.permission.BLUETOOTH_SCAN',
       'android.permission.BLUETOOTH_CONNECT',
@@ -64,23 +87,16 @@ async function requestPermissions(): Promise<PermResult> {
       permissions as PermissionsAndroid.Permission[],
     );
 
-    console.log('Permission results:', JSON.stringify(results));
-
-    const btScan = results['android.permission.BLUETOOTH_SCAN'];
-    const btConnect = results['android.permission.BLUETOOTH_CONNECT'];
+    console.log('Permission request results:', JSON.stringify(results));
 
     const granted =
-      btScan === PermissionsAndroid.RESULTS.GRANTED &&
-      btConnect === PermissionsAndroid.RESULTS.GRANTED;
+      results['android.permission.BLUETOOTH_SCAN'] === PermissionsAndroid.RESULTS.GRANTED &&
+      results['android.permission.BLUETOOTH_CONNECT'] === PermissionsAndroid.RESULTS.GRANTED;
 
-    const blocked =
-      btScan === PermissionsAndroid.RESULTS.NEVER_ASK_AGAIN ||
-      btConnect === PermissionsAndroid.RESULTS.NEVER_ASK_AGAIN;
-
-    return {granted, blocked};
+    return granted;
   } catch (e) {
     console.error('Permission request failed:', e);
-    return {granted: false, blocked: true};
+    return false;
   }
 }
 
@@ -90,7 +106,6 @@ function openAppSettings() {
 
 export default function App() {
   const [permGranted, setPermGranted] = useState(false);
-  const [permBlocked, setPermBlocked] = useState(false);
   const [scanning, setScanning] = useState(false);
   const [devices, setDevices] = useState<DeviceState[]>([]);
   const devicesRef = useRef<DeviceState[]>([]);
@@ -101,10 +116,17 @@ export default function App() {
   }, [devices]);
 
   const handleRequestPermissions = useCallback(async () => {
-    const result = await requestPermissions();
-    setPermGranted(result.granted);
-    setPermBlocked(result.blocked);
-    if (result.granted) {
+    const granted = await requestPermissions();
+    setPermGranted(granted);
+    if (granted) {
+      loadBondedDevices();
+    }
+  }, []);
+
+  const handleCheckPermissions = useCallback(async () => {
+    const granted = await checkPermissions();
+    setPermGranted(granted);
+    if (granted) {
       loadBondedDevices();
     }
   }, []);
@@ -223,30 +245,20 @@ export default function App() {
         <Text style={styles.errorText}>
           Bluetooth-Berechtigungen werden benötigt.
         </Text>
-        {permBlocked ? (
-          <>
-            <Text style={styles.hintText}>
-              Berechtigungen wurden blockiert. Bitte in den
-              App-Einstellungen manuell aktivieren.
-            </Text>
-            <TouchableOpacity
-              style={styles.button}
-              onPress={openAppSettings}>
-              <Text style={styles.buttonText}>Einstellungen öffnen</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.button, {marginTop: 12, backgroundColor: colors.textSecondary}]}
-              onPress={handleRequestPermissions}>
-              <Text style={styles.buttonText}>Erneut prüfen</Text>
-            </TouchableOpacity>
-          </>
-        ) : (
-          <TouchableOpacity
-            style={styles.button}
-            onPress={handleRequestPermissions}>
-            <Text style={styles.buttonText}>Berechtigungen erteilen</Text>
-          </TouchableOpacity>
-        )}
+        <Text style={styles.hintText}>
+          Bitte "Geräte in der Nähe" und "Standort" in den
+          App-Einstellungen aktivieren.
+        </Text>
+        <TouchableOpacity
+          style={styles.button}
+          onPress={openAppSettings}>
+          <Text style={styles.buttonText}>Einstellungen öffnen</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.button, {marginTop: 12, backgroundColor: colors.accent}]}
+          onPress={handleCheckPermissions}>
+          <Text style={styles.buttonText}>Erneut prüfen</Text>
+        </TouchableOpacity>
       </View>
     );
   }
