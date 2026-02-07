@@ -50,15 +50,29 @@ async function requestPermissions(): Promise<boolean> {
     return false;
   }
 
-  const permissions = [
-    PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN,
-    PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT,
-  ];
+  try {
+    const permissions: string[] = [
+      'android.permission.BLUETOOTH_SCAN',
+      'android.permission.BLUETOOTH_CONNECT',
+      'android.permission.ACCESS_FINE_LOCATION',
+    ];
 
-  const results = await PermissionsAndroid.requestMultiple(permissions);
-  return Object.values(results).every(
-    r => r === PermissionsAndroid.RESULTS.GRANTED,
-  );
+    const results = await PermissionsAndroid.requestMultiple(
+      permissions as PermissionsAndroid.Permission[],
+    );
+
+    console.log('Permission results:', JSON.stringify(results));
+
+    // BT permissions are required, location is optional (needed on some devices)
+    const btGranted =
+      results['android.permission.BLUETOOTH_SCAN'] === PermissionsAndroid.RESULTS.GRANTED &&
+      results['android.permission.BLUETOOTH_CONNECT'] === PermissionsAndroid.RESULTS.GRANTED;
+
+    return btGranted;
+  } catch (e) {
+    console.error('Permission request failed:', e);
+    return false;
+  }
 }
 
 export default function App() {
