@@ -144,7 +144,11 @@ class BluetoothPairingModule(private val reactContext: ReactApplicationContext) 
             addAction(BluetoothDevice.ACTION_BOND_STATE_CHANGED)
             priority = IntentFilter.SYSTEM_HIGH_PRIORITY
         }
-        reactContext.registerReceiver(pairingReceiver, pairingFilter)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            reactContext.registerReceiver(pairingReceiver, pairingFilter, Context.RECEIVER_EXPORTED)
+        } else {
+            reactContext.registerReceiver(pairingReceiver, pairingFilter)
+        }
         Log.d(TAG, "Pairing receiver registered")
     }
 
@@ -166,11 +170,17 @@ class BluetoothPairingModule(private val reactContext: ReactApplicationContext) 
     }
 
     private fun handleDeviceFound(device: BluetoothDevice) {
-        if (!hasPermission(Manifest.permission.BLUETOOTH_CONNECT)) return
+        if (!hasPermission(Manifest.permission.BLUETOOTH_CONNECT)) {
+            Log.w(TAG, "Device found but BLUETOOTH_CONNECT permission missing")
+            return
+        }
+
+        val name = device.name ?: "Unknown"
+        Log.d(TAG, "Device found: $name (${device.address})")
 
         val params = Arguments.createMap().apply {
             putString("address", device.address)
-            putString("name", device.name ?: "Unknown")
+            putString("name", name)
             putInt("bondState", device.bondState)
         }
         sendEvent("onDeviceFound", params)
@@ -208,9 +218,14 @@ class BluetoothPairingModule(private val reactContext: ReactApplicationContext) 
             addAction(BluetoothDevice.ACTION_FOUND)
             addAction(BluetoothAdapter.ACTION_DISCOVERY_FINISHED)
         }
-        reactContext.registerReceiver(discoveryReceiver, filter)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            reactContext.registerReceiver(discoveryReceiver, filter, Context.RECEIVER_EXPORTED)
+        } else {
+            reactContext.registerReceiver(discoveryReceiver, filter)
+        }
 
         isDiscovering = adapter.startDiscovery()
+        Log.d(TAG, "Discovery started: $isDiscovering")
         if (isDiscovering) {
             promise.resolve(true)
         } else {

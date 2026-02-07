@@ -98,9 +98,7 @@ export default function App() {
   useEffect(() => {
     const subs = [
       onDeviceFound?.((device: BluetoothDevice) => {
-        if (!isZebraDevice(device)) {
-          return;
-        }
+        console.log('Device found:', device.name, device.address);
         setDevices(prev => {
           if (prev.find(d => d.address === device.address)) {
             return prev;
@@ -139,9 +137,8 @@ export default function App() {
   const loadBondedDevices = useCallback(async () => {
     try {
       const bonded = await getBondedDevices();
-      const zebraBonded = bonded.filter(isZebraDevice);
       setDevices(
-        zebraBonded.map(d => ({...d, pairingStatus: 'idle' as PairingStatus})),
+        bonded.map(d => ({...d, pairingStatus: 'idle' as PairingStatus})),
       );
     } catch (e) {
       console.warn('Failed to load bonded devices', e);
