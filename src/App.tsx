@@ -2,6 +2,7 @@ import React, {useCallback, useEffect, useRef, useState} from 'react';
 import {
   ActivityIndicator,
   FlatList,
+  Linking,
   PermissionsAndroid,
   Platform,
   StatusBar,
@@ -45,9 +46,11 @@ interface DeviceState extends BluetoothDevice {
   pairingStatus: PairingStatus;
 }
 
-async function requestPermissions(): Promise<boolean> {
+type PermResult = {granted: boolean; blocked: boolean};
+
+async function requestPermissions(): Promise<PermResult> {
   if (Platform.OS !== 'android') {
-    return false;
+    return {granted: false, blocked: false};
   }
 
   try {
@@ -63,20 +66,31 @@ async function requestPermissions(): Promise<boolean> {
 
     console.log('Permission results:', JSON.stringify(results));
 
-    // BT permissions are required, location is optional (needed on some devices)
-    const btGranted =
-      results['android.permission.BLUETOOTH_SCAN'] === PermissionsAndroid.RESULTS.GRANTED &&
-      results['android.permission.BLUETOOTH_CONNECT'] === PermissionsAndroid.RESULTS.GRANTED;
+    const btScan = results['android.permission.BLUETOOTH_SCAN'];
+    const btConnect = results['android.permission.BLUETOOTH_CONNECT'];
 
-    return btGranted;
+    const granted =
+      btScan === PermissionsAndroid.RESULTS.GRANTED &&
+      btConnect === PermissionsAndroid.RESULTS.GRANTED;
+
+    const blocked =
+      btScan === PermissionsAndroid.RESULTS.NEVER_ASK_AGAIN ||
+      btConnect === PermissionsAndroid.RESULTS.NEVER_ASK_AGAIN;
+
+    return {granted, blocked};
   } catch (e) {
     console.error('Permission request failed:', e);
-    return false;
+    return {granted: false, blocked: true};
   }
+}
+
+function openAppSettings() {
+  Linking.openSettings();
 }
 
 export default function App() {
   const [permGranted, setPermGranted] = useState(false);
+  const [permBlocked, setPermBlocked] = useState(false);
   const [scanning, setScanning] = useState(false);
   const [devices, setDevices] = useState<DeviceState[]>([]);
   const devicesRef = useRef<DeviceState[]>([]);
@@ -86,14 +100,18 @@ export default function App() {
     devicesRef.current = devices;
   }, [devices]);
 
-  useEffect(() => {
-    requestPermissions().then(granted => {
-      setPermGranted(granted);
-      if (granted) {
-        loadBondedDevices();
-      }
-    });
+  const handleRequestPermissions = useCallback(async () => {
+    const result = await requestPermissions();
+    setPermGranted(result.granted);
+    setPermBlocked(result.blocked);
+    if (result.granted) {
+      loadBondedDevices();
+    }
   }, []);
+
+  useEffect(() => {
+    handleRequestPermissions();
+  }, [handleRequestPermissions]);
 
   useEffect(() => {
     const subs = [
@@ -205,11 +223,30 @@ export default function App() {
         <Text style={styles.errorText}>
           Bluetooth-Berechtigungen werden benötigt.
         </Text>
-        <TouchableOpacity
-          style={styles.button}
-          onPress={() => requestPermissions().then(setPermGranted)}>
-          <Text style={styles.buttonText}>Berechtigungen erteilen</Text>
-        </TouchableOpacity>
+        {permBlocked ? (
+          <>
+            <Text style={styles.hintText}>
+              Berechtigungen wurden blockiert. Bitte in den
+              App-Einstellungen manuell aktivieren.
+            </Text>
+            <TouchableOpacity
+              style={styles.button}
+              onPress={openAppSettings}>
+              <Text style={styles.buttonText}>Einstellungen öffnen</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.button, {marginTop: 12, backgroundColor: colors.textSecondary}]}
+              onPress={handleRequestPermissions}>
+              <Text style={styles.buttonText}>Erneut prüfen</Text>
+            </TouchableOpacity>
+          </>
+        ) : (
+          <TouchableOpacity
+            style={styles.button}
+            onPress={handleRequestPermissions}>
+            <Text style={styles.buttonText}>Berechtigungen erteilen</Text>
+          </TouchableOpacity>
+        )}
       </View>
     );
   }
@@ -394,6 +431,13 @@ const styles = StyleSheet.create({
     fontSize: 16,
     marginBottom: 16,
     textAlign: 'center',
+  },
+  hintText: {
+    color: colors.textSecondary,
+    fontSize: 14,
+    marginBottom: 20,
+    textAlign: 'center',
+    paddingHorizontal: 32,
   },
   button: {
     backgroundColor: colors.primary,
