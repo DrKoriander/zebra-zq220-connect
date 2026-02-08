@@ -334,7 +334,9 @@ function StatusBadge({status, bonded}: {status: PairingStatus; bonded: boolean})
   if (status === 'pairing') {
     return (
       <View style={[styles.badge, {backgroundColor: colors.warning}]}>
-        <Text style={[styles.badgeText, {color: colors.text}]}>Koppeln...</Text>
+        <Text style={[styles.badgeText, {color: colors.text}]}>
+          Bitte Dialog bestätigen...
+        </Text>
       </View>
     );
   }

@@ -30,7 +30,6 @@ class BluetoothPairingModule(private val reactContext: ReactApplicationContext) 
         bluetoothManager?.adapter
     }
 
-    private var pairingPin: String = "0000"
     private var isDiscovering = false
 
     private val discoveryReceiver = object : BroadcastReceiver() {
@@ -53,75 +52,40 @@ class BluetoothPairingModule(private val reactContext: ReactApplicationContext) 
         }
     }
 
-    private val pairingReceiver = object : BroadcastReceiver() {
+    private val bondReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
-            when (intent.action) {
-                BluetoothDevice.ACTION_PAIRING_REQUEST -> {
-                    val device = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                        intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE, BluetoothDevice::class.java)
-                    } else {
-                        @Suppress("DEPRECATION")
-                        intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
-                    }
-                    val variant = intent.getIntExtra(BluetoothDevice.EXTRA_PAIRING_VARIANT, -1)
-                    Log.d(TAG, "Pairing request received: device=${device?.address}, variant=$variant")
+            if (intent.action != BluetoothDevice.ACTION_BOND_STATE_CHANGED) return
 
-                    device?.let {
-                        try {
-                            when (variant) {
-                                0 -> {
-                                    it.setPin(pairingPin.toByteArray())
-                                    Log.d(TAG, "PIN set to $pairingPin for ${it.address}")
-                                    abortBroadcast()
-                                }
-                                2 -> {
-                                    it.setPairingConfirmation(true)
-                                    Log.d(TAG, "Passkey confirmation set for ${it.address}")
-                                    abortBroadcast()
-                                }
-                                3 -> {
-                                    it.setPairingConfirmation(true)
-                                    Log.d(TAG, "Consent confirmation set for ${it.address}")
-                                    abortBroadcast()
-                                }
-                                else -> {
-                                    Log.w(TAG, "Unknown pairing variant: $variant")
-                                }
-                            }
-                        } catch (e: Exception) {
-                            Log.e(TAG, "Error handling pairing request", e)
+            val device = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE, BluetoothDevice::class.java)
+            } else {
+                @Suppress("DEPRECATION")
+                intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
+            }
+            val bondState = intent.getIntExtra(BluetoothDevice.EXTRA_BOND_STATE, BluetoothDevice.BOND_NONE)
+            val prevState = intent.getIntExtra(BluetoothDevice.EXTRA_PREVIOUS_BOND_STATE, BluetoothDevice.BOND_NONE)
+
+            Log.d(TAG, "Bond state changed: device=${device?.address}, prev=$prevState, new=$bondState")
+
+            device?.let {
+                try {
+                    val params = Arguments.createMap().apply {
+                        putString("address", it.address)
+                        putString("name", it.name ?: "Unknown")
+                        putInt("bondState", bondState)
+                    }
+                    when (bondState) {
+                        BluetoothDevice.BOND_BONDED -> {
+                            sendEvent("onPairingSuccess", params)
                         }
-                    }
-                }
-                BluetoothDevice.ACTION_BOND_STATE_CHANGED -> {
-                    val device = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                        intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE, BluetoothDevice::class.java)
-                    } else {
-                        @Suppress("DEPRECATION")
-                        intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
-                    }
-                    val bondState = intent.getIntExtra(BluetoothDevice.EXTRA_BOND_STATE, BluetoothDevice.BOND_NONE)
-                    val prevState = intent.getIntExtra(BluetoothDevice.EXTRA_PREVIOUS_BOND_STATE, BluetoothDevice.BOND_NONE)
-
-                    Log.d(TAG, "Bond state changed: device=${device?.address}, prev=$prevState, new=$bondState")
-
-                    device?.let {
-                        val params = Arguments.createMap().apply {
-                            putString("address", it.address)
-                            putString("name", it.name ?: "Unknown")
-                            putInt("bondState", bondState)
-                        }
-                        when (bondState) {
-                            BluetoothDevice.BOND_BONDED -> {
-                                sendEvent("onPairingSuccess", params)
-                            }
-                            BluetoothDevice.BOND_NONE -> {
-                                if (prevState == BluetoothDevice.BOND_BONDING) {
-                                    sendEvent("onPairingFailed", params)
-                                }
+                        BluetoothDevice.BOND_NONE -> {
+                            if (prevState == BluetoothDevice.BOND_BONDING) {
+                                sendEvent("onPairingFailed", params)
                             }
                         }
                     }
+                } catch (e: SecurityException) {
+                    Log.e(TAG, "SecurityException in bondReceiver", e)
                 }
             }
         }
@@ -129,22 +93,17 @@ class BluetoothPairingModule(private val reactContext: ReactApplicationContext) 
 
     override fun initialize() {
         super.initialize()
-        registerPairingReceiver()
+        registerBondReceiver()
     }
 
-    @Suppress("MissingPermission")
-    private fun registerPairingReceiver() {
-        val pairingFilter = IntentFilter().apply {
-            addAction(BluetoothDevice.ACTION_PAIRING_REQUEST)
-            addAction(BluetoothDevice.ACTION_BOND_STATE_CHANGED)
-            priority = IntentFilter.SYSTEM_HIGH_PRIORITY
-        }
+    private fun registerBondReceiver() {
+        val filter = IntentFilter(BluetoothDevice.ACTION_BOND_STATE_CHANGED)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            reactContext.registerReceiver(pairingReceiver, pairingFilter, Context.RECEIVER_EXPORTED)
+            reactContext.registerReceiver(bondReceiver, filter, Context.RECEIVER_EXPORTED)
         } else {
-            reactContext.registerReceiver(pairingReceiver, pairingFilter)
+            reactContext.registerReceiver(bondReceiver, filter)
         }
-        Log.d(TAG, "Pairing receiver registered")
+        Log.d(TAG, "Bond state receiver registered")
     }
 
     override fun onCatalystInstanceDestroy() {
@@ -156,7 +115,7 @@ class BluetoothPairingModule(private val reactContext: ReactApplicationContext) 
             reactContext.unregisterReceiver(discoveryReceiver)
         } catch (_: Exception) {}
         try {
-            reactContext.unregisterReceiver(pairingReceiver)
+            reactContext.unregisterReceiver(bondReceiver)
         } catch (_: Exception) {}
     }
 
@@ -289,9 +248,6 @@ class BluetoothPairingModule(private val reactContext: ReactApplicationContext) 
                 isDiscovering = false
             }
 
-            pairingPin = pin
-            PairingReceiver.pin = pin
-
             val device = adapter.getRemoteDevice(address)
             if (device.bondState == BluetoothDevice.BOND_BONDED) {
                 promise.resolve("ALREADY_BONDED")
@@ -299,6 +255,7 @@ class BluetoothPairingModule(private val reactContext: ReactApplicationContext) 
             }
 
             val result = device.createBond()
+            Log.d(TAG, "createBond() for ${device.address}: $result")
             if (result) {
                 promise.resolve("BONDING_STARTED")
             } else {
